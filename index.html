@@ -1,0 +1,870 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>求人票チェッカー — 求人票の実質条件を採点する</title>
+<meta name="description" content="求人票に書かれた年収・基本給・手当・年間休日・残業条件を入力すると、実質時給を計算し、厚生労働省の統計に基づく業種相場と地域別最低賃金の両面から採点します。入力内容は端末外に送信されません。">
+<link rel="canonical" href="https://shibazuke0707-beep.github.io/kyujinhyo-checker/">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="求人票チェッカー">
+<meta property="og:title" content="求人票チェッカー">
+<meta property="og:description" content="年収の額面だけでは見えない実質時給・年間休日・残業条件を、業種相場と最低賃金の両面から採点します。">
+<meta property="og:url" content="https://shibazuke0707-beep.github.io/kyujinhyo-checker/">
+<meta property="og:image" content="https://shibazuke0707-beep.github.io/kyujinhyo-checker/assets/ogp.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:locale" content="ja_JP">
+<meta name="twitter:card" content="summary_large_image">
+
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<meta name="theme-color" content="#2B4C7E">
+
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="求人票チェッカー">
+<meta name="mobile-web-app-capable" content="yes">
+<style>
+  :root {
+    --paper: #ffffff;
+    --field: #f4f6f8;
+    --ink: #1b2430;
+    --ink-soft: #5d6874;
+    --rule: #d5dae1;
+    --rule-strong: #aab3bf;
+    --navy: #2b4c7e;
+    --good: #2e6f4e;
+    --caution: #a8791f;
+    --bad: #b23a2e;
+    --serif: "Yu Mincho", "YuMincho", "Hiragino Mincho ProN", "Noto Serif JP", serif;
+    --sans: "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", "Meiryo", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    color: var(--ink);
+    background: var(--field);
+    line-height: 1.75;
+    font-size: 15px;
+  }
+  .wrap { max-width: 1140px; margin: 0 auto; padding: 0 20px 80px; }
+
+  header { padding: 56px 0 32px; }
+  header h1 {
+    font-family: var(--serif);
+    font-size: 30px;
+    font-weight: 600;
+    margin: 0 0 10px;
+    letter-spacing: 0.02em;
+  }
+  header p { margin: 0; color: var(--ink-soft); max-width: 60ch; }
+
+  .cols { display: grid; grid-template-columns: 1fr 380px; gap: 28px; align-items: start; }
+  @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
+
+  .sheet {
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+  }
+  fieldset { border: 0; border-top: 1px solid var(--rule); margin: 0; padding: 22px 26px 26px; }
+  fieldset:first-of-type { border-top: 0; }
+  legend {
+    font-family: var(--serif);
+    font-size: 17px;
+    font-weight: 600;
+    padding: 0;
+    margin-bottom: 4px;
+  }
+  .hint { color: var(--ink-soft); font-size: 13px; margin: 0 0 18px; }
+
+  .row { display: grid; grid-template-columns: 190px 1fr; gap: 14px; align-items: baseline; padding: 9px 0; }
+  .row + .row { border-top: 1px dotted var(--rule); }
+  @media (max-width: 620px) { .row { grid-template-columns: 1fr; gap: 4px; } }
+  .row > label:first-child { color: var(--ink-soft); font-size: 14px; }
+  .ctl { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+  input[type=number], input[type=text], select {
+    font: inherit;
+    font-size: 15px;
+    color: var(--ink);
+    background: var(--paper);
+    border: 1px solid var(--rule-strong);
+    border-radius: 3px;
+    padding: 6px 9px;
+    min-width: 0;
+  }
+  input[type=number] { width: 120px; text-align: right; }
+  select { padding-right: 26px; }
+  input:focus-visible, select:focus-visible, button:focus-visible {
+    outline: 2px solid var(--navy);
+    outline-offset: 1px;
+  }
+  .unit { color: var(--ink-soft); font-size: 13px; }
+  .sub { color: var(--ink-soft); font-size: 13px; flex-basis: 100%; margin: 0; }
+
+  .seg { display: inline-flex; border: 1px solid var(--rule-strong); border-radius: 3px; overflow: hidden; }
+  .seg label { padding: 6px 14px; cursor: pointer; font-size: 14px; background: var(--paper); }
+  .seg label + label { border-left: 1px solid var(--rule-strong); }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .seg input:checked + span { color: var(--paper); }
+  .seg label:has(input:checked) { background: var(--navy); color: var(--paper); }
+
+  .allow { display: grid; grid-template-columns: 130px auto 1fr; gap: 10px; align-items: center; padding: 7px 0; }
+  .allow + .allow { border-top: 1px dotted var(--rule); }
+  @media (max-width: 620px) { .allow { grid-template-columns: 1fr; gap: 4px; } }
+  .allow > span:first-child { font-size: 14px; color: var(--ink-soft); }
+  .allow .flag { font-size: 12px; color: var(--caution); }
+
+  .actions { padding: 20px 26px 26px; border-top: 1px solid var(--rule); }
+  button.run {
+    font: inherit;
+    font-size: 15px;
+    background: var(--navy);
+    color: var(--paper);
+    border: 0;
+    border-radius: 3px;
+    padding: 11px 26px;
+    cursor: pointer;
+  }
+  button.run:hover { background: #23406c; }
+  .err { color: var(--bad); font-size: 13px; margin: 10px 0 0; }
+
+  /* 結果パネル */
+  .result { position: sticky; top: 20px; }
+  @media (max-width: 900px) { .result { position: static; } }
+  .empty { padding: 40px 26px; color: var(--ink-soft); font-size: 14px; }
+
+  .verdict { padding: 26px 26px 22px; border-bottom: 1px solid var(--rule); }
+  .score { font-family: var(--serif); font-size: 62px; line-height: 1; font-weight: 600; }
+  .score small { font-size: 18px; color: var(--ink-soft); margin-left: 4px; }
+  .rank { font-family: var(--serif); font-size: 20px; margin-top: 8px; }
+  .band { display: flex; height: 5px; margin-top: 16px; border-radius: 3px; overflow: hidden; }
+  .band i { flex: 1; }
+  .band i.on { box-shadow: inset 0 0 0 99px currentColor; }
+  .marker { font-size: 12px; color: var(--ink-soft); margin-top: 7px; }
+
+  .warn {
+    background: #fbf0ee;
+    border-left: 3px solid var(--bad);
+    padding: 16px 18px;
+    margin: 0;
+    font-size: 14px;
+  }
+  .warn strong { display: block; font-family: var(--serif); font-size: 16px; color: var(--bad); margin-bottom: 6px; }
+
+  .ledger { padding: 22px 26px 26px; }
+  .ledger h2 { font-family: var(--serif); font-size: 16px; font-weight: 600; margin: 0 0 12px; }
+  .line { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; font-size: 14px; border-bottom: 1px dotted var(--rule); }
+  .line:last-child { border-bottom: 0; }
+  .line .amt { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .line.sum { border-top: 1px solid var(--ink); border-bottom: 0; margin-top: 6px; padding-top: 10px; font-weight: 600; }
+  .cat { margin-top: 18px; }
+  .cat h3 { font-size: 14px; font-weight: 600; margin: 0 0 3px; display: flex; justify-content: space-between; }
+  .cat .bar { height: 4px; background: var(--rule); border-radius: 2px; overflow: hidden; }
+  .cat .bar i { display: block; height: 100%; }
+  .cat p { margin: 6px 0 0; font-size: 13px; color: var(--ink-soft); }
+  .facts { padding: 0 26px 26px; font-size: 13px; color: var(--ink-soft); }
+  .facts div { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px dotted var(--rule); }
+
+  #updateBar {
+    background: var(--navy); color: var(--paper);
+    padding: 12px 20px; font-size: 14px;
+    display: flex; gap: 14px; align-items: center; justify-content: center;
+    flex-wrap: wrap;
+  }
+  #updateBar button {
+    font: inherit; font-size: 14px;
+    background: var(--paper); color: var(--navy);
+    border: 0; border-radius: 3px; padding: 6px 16px; cursor: pointer;
+  }
+
+  footer { margin-top: 34px; font-size: 12px; color: var(--ink-soft); line-height: 1.9; }
+  footer a { color: var(--navy); }
+</style>
+
+<div id="updateBar" hidden>
+  新しい判定基準が公開されています。
+  <button type="button" id="updateNow">最新版に更新</button>
+</div>
+
+<div class="wrap">
+  <header>
+    <h1>求人票チェッカー</h1>
+    <p>年収の額面だけでは、手取りの時間あたり単価も休みの実態も見えません。求人票に書かれている内容をそのまま入力すると、実質時給・年間休日・残業条件を業種相場と最低賃金の両面から採点します。</p>
+  </header>
+
+  <div class="cols">
+    <div class="sheet">
+
+      <fieldset>
+        <legend>この求人について</legend>
+        <p class="hint">業種と勤務地は、相場比較と最低賃金の判定に使います。</p>
+        <div class="row">
+          <label for="industry">業種</label>
+          <div class="ctl"><select id="industry"></select></div>
+        </div>
+        <div class="row">
+          <label for="pref">勤務地(都道府県)</label>
+          <div class="ctl"><select id="pref"></select></div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>給与</legend>
+        <p class="hint">求人票の書き方に合わせて入力方式を選んでください。</p>
+        <div class="row">
+          <label>入力方式</label>
+          <div class="ctl">
+            <span class="seg">
+              <label><input type="radio" name="paymode" value="monthly" checked><span>月給から入力</span></label>
+              <label><input type="radio" name="paymode" value="annual"><span>年収から入力</span></label>
+            </span>
+          </div>
+        </div>
+
+        <div id="modeMonthly">
+          <div class="row">
+            <label for="basePay">基本給(月額)</label>
+            <div class="ctl"><input type="number" id="basePay" min="0" step="1000"><span class="unit">円</span></div>
+          </div>
+        </div>
+
+        <div id="modeAnnual" hidden>
+          <div class="row">
+            <label for="annualMin">年収(下限)</label>
+            <div class="ctl">
+              <input type="number" id="annualMin" min="0" step="10000"><span class="unit">円</span>
+              <p class="sub">幅がある場合は下限を入力してください。実態は下限に近いことが多いためです。</p>
+            </div>
+          </div>
+          <div class="row">
+            <label for="annualMax">年収(上限・任意)</label>
+            <div class="ctl"><input type="number" id="annualMax" min="0" step="10000"><span class="unit">円</span></div>
+          </div>
+        </div>
+
+        <div class="row">
+          <label for="bonus">賞与</label>
+          <div class="ctl">
+            <select id="bonus">
+              <option value="none">なし</option>
+              <option value="unstated" selected>あり(金額の記載なし・「業績による」等)</option>
+              <option value="stated">あり(金額または月数の記載あり)</option>
+            </select>
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>固定残業代(みなし残業)</legend>
+        <div class="row">
+          <label for="fixedOtMode">記載の有無</label>
+          <div class="ctl">
+            <select id="fixedOtMode">
+              <option value="none">固定残業代はない</option>
+              <option value="included" selected>あり(月給に含まれる)</option>
+              <option value="separate">あり(月給とは別に支給)</option>
+              <option value="unclear">あり(月給に含まれるか不明)</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <label for="fixedOtHours">相当する時間数</label>
+          <div class="ctl">
+            <input type="number" id="fixedOtHours" min="0" max="200" step="1"><span class="unit">時間/月</span>
+            <p class="sub">記載がなければ空欄のままにしてください。空欄も評価の材料になります。</p>
+          </div>
+        </div>
+        <div class="row">
+          <label for="fixedOtAmount">固定残業代の金額</label>
+          <div class="ctl"><input type="number" id="fixedOtAmount" min="0" step="1000"><span class="unit">円/月</span></div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>手当</legend>
+        <p class="hint">金額が書かれている固定的な手当だけを実質時給に加算します。金額不明のものは加算せず、情報開示の問題として扱います。</p>
+        <div id="allowances"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>休日と労働時間</legend>
+        <div class="row">
+          <label for="holidays">年間休日数</label>
+          <div class="ctl"><input type="number" id="holidays" min="0" max="365" step="1" value="120"><span class="unit">日</span></div>
+        </div>
+        <div class="row">
+          <label for="dailyHours">1日の所定労働時間</label>
+          <div class="ctl"><input type="number" id="dailyHours" min="1" max="16" step="0.25" value="8"><span class="unit">時間</span></div>
+        </div>
+        <div class="row">
+          <label>勤務制度</label>
+          <div class="ctl">
+            <select id="workSystem">
+              <option value="normal">通常の勤務時間制</option>
+              <option value="flex">フレックスタイム制</option>
+              <option value="discretion">裁量労働制</option>
+            </select>
+          </div>
+        </div>
+      </fieldset>
+
+      <div class="actions">
+        <button class="run" id="run">この求人票を採点する</button>
+        <p class="err" id="err" hidden></p>
+      </div>
+    </div>
+
+    <div class="sheet result" id="result">
+      <p class="empty">左側に求人票の内容を入力して「この求人票を採点する」を押すと、ここに採点結果が出ます。</p>
+    </div>
+  </div>
+
+  <footer>
+    賃金の相場は厚生労働省「令和7年賃金構造基本統計調査」の産業・年齢階級別データ(20〜24歳)、最低賃金は同省「地域別最低賃金の全国一覧」令和7年度版に基づいています。<br>
+    このツールの採点は求人票の記載内容だけを機械的に評価したもので、企業の実態や違法性を判定するものではありません。応募の判断は求人票以外の情報も確認したうえで行ってください。<br>
+    <strong>入力した求人票の内容は、端末の外に送信も保存もされません。</strong>すべての計算はお使いのブラウザ内で完結します。<br>
+    <a href="privacy.html">プライバシーポリシー・免責事項</a> ／ <a href="https://github.com/shibazuke0707-beep/kyujinhyo-checker">ソースコード</a> ／ 運営:柴漬け
+  </footer>
+</div>
+
+<script type="module">
+// ============================================================
+// 都道府県 × 業種 の基準時給、および最低賃金
+//
+// 基準時給の作り方:
+//   全国20〜24歳の業種別所定内給与額(令和7年賃金構造基本統計調査 第5-1表)を
+//   163.33時間で割った全国基準時給に、都道府県×産業の地域係数を掛けたもの。
+//   地域係数 = 当該県の産業別所定内給与額(年齢計) ÷ 全国計の同産業(年齢計)
+//   出典: 同調査 参考表2「男女計の都道府県、産業別所定内給与額」
+//
+//   ※参考表2は年齢計なので絶対値はそのまま使えない。地域差だけを比率として
+//     取り出し、20〜24歳の全国基準に掛けている。
+//
+// 最低賃金: 厚生労働省「地域別最低賃金の全国一覧」令和7年度
+//   発効日は県ごとに異なる(栃木2025-10-01〜秋田2026-03-31)ため、
+//   判定日時点で発効済みかを必ず確認すること。
+// ============================================================
+
+const INDUSTRIES = [
+  ['it_web', 'IT・Web'], ['construction', '建設業'], ['manufacturing', '製造業'],
+  ['retail_service', '小売・サービス業'], ['food_service', '飲食業'],
+  ['medical_welfare', '医療・福祉'], ['logistics', '運輸・物流'],
+];
+
+// [県名, 最低賃金, 発効日, [業種別基準時給 — INDUSTRIES の並び順]]
+const PREF = {
+  hokkaido:   ['北海道', 1075, '2025-10-04', [1529, 1435, 1132, 1254, 1304, 1465, 1232]],
+  aomori:     ['青森県', 1029, '2025-11-21', [1175, 1232, 1044, 1014, 1152, 1293, 1212]],
+  iwate:      ['岩手県', 1031, '2025-12-01', [1297, 1209, 1117, 1197, 1185, 1372, 1153]],
+  miyagi:     ['宮城県', 1038, '2025-10-04', [1354, 1513, 1267, 1367, 1215, 1420, 1345]],
+  akita:      ['秋田県', 1031, '2026-03-31', [1342, 1214, 1092, 1068, 1095, 1460, 1291]],
+  yamagata:   ['山形県', 1032, '2025-12-23', [1308, 1235, 1097, 1122, 1152, 1365, 1268]],
+  fukushima:  ['福島県', 1033, '2026-01-01', [1260, 1272, 1242, 1184, 1162, 1411, 1367]],
+  ibaraki:    ['茨城県', 1074, '2025-10-12', [1250, 1494, 1384, 1281, 1295, 1496, 1425]],
+  tochigi:    ['栃木県', 1068, '2025-10-01', [1494, 1414, 1405, 1234, 1324, 1542, 1401]],
+  gunma:      ['群馬県', 1063, '2026-03-01', [1369, 1493, 1334, 1312, 1261, 1418, 1385]],
+  saitama:    ['埼玉県', 1141, '2025-11-01', [1509, 1571, 1327, 1397, 1302, 1507, 1338]],
+  chiba:      ['千葉県', 1140, '2025-10-03', [1451, 1673, 1401, 1367, 1357, 1717, 1564]],
+  tokyo:      ['東京都', 1226, '2025-10-03', [1676, 1854, 1771, 1854, 1657, 1785, 1845]],
+  kanagawa:   ['神奈川県', 1225, '2025-10-04', [1777, 1595, 1693, 1462, 1448, 1698, 1512]],
+  niigata:    ['新潟県', 1050, '2025-10-02', [1314, 1326, 1194, 1184, 1223, 1449, 1342]],
+  toyama:     ['富山県', 1062, '2025-10-12', [1303, 1390, 1283, 1283, 1298, 1437, 1404]],
+  ishikawa:   ['石川県', 1054, '2025-10-08', [1528, 1404, 1251, 1192, 1325, 1430, 1528]],
+  fukui:      ['福井県', 1053, '2025-10-08', [1553, 1369, 1303, 1155, 1234, 1367, 1345]],
+  yamanashi:  ['山梨県', 1052, '2025-12-01', [1350, 1414, 1437, 1230, 1383, 1494, 1374]],
+  nagano:     ['長野県', 1061, '2025-10-03', [1318, 1512, 1275, 1281, 1334, 1510, 1386]],
+  gifu:       ['岐阜県', 1065, '2025-10-18', [1430, 1467, 1329, 1261, 1302, 1454, 1374]],
+  shizuoka:   ['静岡県', 1097, '2025-11-01', [1393, 1544, 1346, 1321, 1254, 1421, 1433]],
+  aichi:      ['愛知県', 1140, '2025-10-18', [1580, 1512, 1432, 1526, 1338, 1573, 1564]],
+  mie:        ['三重県', 1087, '2025-11-21', [1383, 1535, 1434, 1288, 1310, 1463, 1422]],
+  shiga:      ['滋賀県', 1080, '2025-10-05', [1675, 1539, 1430, 1300, 1622, 1592, 1415]],
+  kyoto:      ['京都府', 1122, '2025-11-21', [1517, 1512, 1491, 1361, 1447, 1574, 1418]],
+  osaka:      ['大阪府', 1177, '2025-10-16', [1482, 1644, 1459, 1550, 1421, 1603, 1555]],
+  hyogo:      ['兵庫県', 1116, '2025-10-04', [1418, 1606, 1484, 1379, 1384, 1468, 1495]],
+  nara:       ['奈良県', 1051, '2025-11-16', [1351, 1580, 1322, 1325, 1354, 1566, 1352]],
+  wakayama:   ['和歌山県', 1045, '2025-11-01', [1278, 1415, 1347, 1189, 1188, 1378, 1362]],
+  tottori:    ['鳥取県', 1030, '2025-10-04', [1254, 1292, 1075, 1144, 1174, 1421, 1306]],
+  shimane:    ['島根県', 1033, '2025-11-17', [1303, 1340, 1129, 1140, 1126, 1369, 1173]],
+  okayama:    ['岡山県', 1047, '2025-12-01', [1324, 1339, 1303, 1229, 1205, 1370, 1371]],
+  hiroshima:  ['広島県', 1085, '2025-11-01', [1484, 1480, 1391, 1357, 1218, 1480, 1383]],
+  yamaguchi:  ['山口県', 1043, '2025-10-16', [1393, 1445, 1351, 1178, 1190, 1410, 1346]],
+  tokushima:  ['徳島県', 1046, '2026-01-01', [1531, 1331, 1370, 1157, 1265, 1448, 1401]],
+  kagawa:     ['香川県', 1036, '2025-10-18', [1350, 1507, 1251, 1284, 1260, 1548, 1368]],
+  ehime:      ['愛媛県', 1033, '2025-12-01', [1500, 1288, 1216, 1181, 1137, 1307, 1303]],
+  kochi:      ['高知県', 1023, '2025-12-01', [1327, 1239, 1077, 1159, 1126, 1398, 1301]],
+  fukuoka:    ['福岡県', 1057, '2025-11-16', [1471, 1541, 1288, 1327, 1231, 1405, 1401]],
+  saga:       ['佐賀県', 1030, '2025-11-21', [1249, 1302, 1168, 1182, 1150, 1319, 1200]],
+  nagasaki:   ['長崎県', 1031, '2025-12-01', [1208, 1310, 1252, 1135, 1123, 1332, 1199]],
+  kumamoto:   ['熊本県', 1034, '2026-01-01', [1361, 1226, 1293, 1214, 1196, 1365, 1236]],
+  oita:       ['大分県', 1035, '2026-01-01', [1333, 1467, 1230, 1169, 1141, 1446, 1214]],
+  miyazaki:   ['宮崎県', 1023, '2025-11-16', [1261, 1062, 1125, 1136, 1178, 1260, 1257]],
+  kagoshima:  ['鹿児島県', 1026, '2025-11-01', [1260, 1180, 1198, 1169, 1164, 1453, 1256]],
+  okinawa:    ['沖縄県', 1023, '2025-12-01', [1229, 1268, 1006, 1134, 1286, 1376, 1218]],
+};
+
+function industryIndex(key) {
+  return INDUSTRIES.findIndex(i => i[0] === key);
+}
+
+/** 判定日時点で最低賃金が発効済みか */
+function minWageInEffect(prefKey, asOf = new Date()) {
+  const p = PREF[prefKey];
+  return p && new Date(p[2]) <= asOf ? { label: p[0], amount: p[1], from: p[2] } : null;
+}
+
+/** その地域・業種の相場自体が最低賃金に近いか(329組中55組が該当) */
+const MARKET_NEAR_FLOOR_RATIO = 1.15;
+
+// ============================================================
+// 手当の分類
+//  fixed    : 金額が明記されていれば実質賃金に算入する
+//  variable : 実費補填・条件付きのため算入しない
+//  otSuspect: 固定残業代の代替に使われている疑い。算入せず残業リスクで減点
+// ============================================================
+const ALLOWANCES = [
+  { id: 'housing',   label: '住宅手当・家賃補助', kind: 'fixed' },
+  { id: 'regional',  label: '地域手当',          kind: 'fixed' },
+  { id: 'qualif',    label: '資格手当',          kind: 'fixed' },
+  { id: 'sales',     label: '営業手当',          kind: 'otSuspect' },
+  { id: 'commuting', label: '通勤手当',          kind: 'variable' },
+  { id: 'family',    label: '家族手当',          kind: 'variable' },
+  { id: 'attend',    label: '皆勤手当',          kind: 'variable' },
+];
+const KIND_NOTE = {
+  fixed: '金額の記載があれば実質時給に加算します',
+  variable: '実費補填や条件付きのため、実質時給には加算しません',
+  otSuspect: '残業代の代わりに使われている場合があるため加算しません',
+};
+
+// ------------------------------------------------------------
+// フォーム構築
+// ------------------------------------------------------------
+const $ = id => document.getElementById(id);
+
+$('industry').innerHTML = '<option value="">選択してください</option>' +
+  INDUSTRIES.map(([k, label]) => `<option value="${k}">${label}</option>`).join('');
+
+$('pref').innerHTML = '<option value="">選択してください</option>' +
+  Object.entries(PREF).map(([k, v]) => `<option value="${k}">${v[0]}</option>`).join('');
+
+$('allowances').innerHTML = ALLOWANCES.map(a => `
+  <div class="allow">
+    <span>${a.label}</span>
+    <select id="al_${a.id}" data-allow="${a.id}">
+      <option value="none">なし・記載なし</option>
+      <option value="unstated">あり(金額の記載なし)</option>
+      <option value="stated">あり(金額の記載あり)</option>
+    </select>
+    <span class="ctl">
+      <input type="number" id="am_${a.id}" min="0" step="1000" placeholder="金額" disabled>
+      <span class="unit">円/月</span>
+      <span class="flag" id="af_${a.id}"></span>
+    </span>
+  </div>`).join('');
+
+for (const a of ALLOWANCES) {
+  $(`al_${a.id}`).addEventListener('change', e => {
+    const stated = e.target.value === 'stated';
+    $(`am_${a.id}`).disabled = !stated;
+    if (!stated) $(`am_${a.id}`).value = '';
+    $(`af_${a.id}`).textContent = e.target.value === 'none' ? '' : KIND_NOTE[a.kind];
+  });
+}
+
+document.querySelectorAll('input[name=paymode]').forEach(r => {
+  r.addEventListener('change', () => {
+    const annual = document.querySelector('input[name=paymode]:checked').value === 'annual';
+    $('modeMonthly').hidden = annual;
+    $('modeAnnual').hidden = !annual;
+  });
+});
+
+// ------------------------------------------------------------
+// 採点ロジック
+// ------------------------------------------------------------
+const yen = n => Math.round(n).toLocaleString('ja-JP');
+
+function collect() {
+  const mode = document.querySelector('input[name=paymode]:checked').value;
+  const num = id => { const v = $(id).value.trim(); return v === '' ? null : Number(v); };
+
+  const allowances = ALLOWANCES.map(a => ({
+    ...a,
+    disclosure: $(`al_${a.id}`).value,
+    amount: num(`am_${a.id}`),
+  }));
+
+  return {
+    industry: $('industry').value,
+    pref: $('pref').value,
+    mode,
+    basePay: num('basePay'),
+    annualMin: num('annualMin'),
+    annualMax: num('annualMax'),
+    bonus: $('bonus').value,
+    fixedOtMode: $('fixedOtMode').value,
+    fixedOtHours: num('fixedOtHours'),
+    fixedOtAmount: num('fixedOtAmount'),
+    allowances,
+    holidays: num('holidays'),
+    dailyHours: num('dailyHours'),
+    workSystem: $('workSystem').value,
+  };
+}
+
+function validate(d) {
+  if (!d.industry) return '業種を選んでください。';
+  if (!d.pref) return '勤務地の都道府県を選んでください。';
+  if (d.mode === 'monthly' && !d.basePay) return '基本給を入力してください。';
+  if (d.mode === 'annual' && !d.annualMin) return '年収(下限)を入力してください。';
+  if (!d.holidays && d.holidays !== 0) return '年間休日数を入力してください。';
+  if (!d.dailyHours) return '1日の所定労働時間を入力してください。';
+  if (d.holidays >= 365) return '年間休日数を365日未満で入力してください。';
+  for (const a of d.allowances) {
+    if (a.disclosure === 'stated' && !a.amount) return `${a.label}の金額を入力してください。`;
+  }
+  return null;
+}
+
+function normalize(d) {
+  const notes = [];
+
+  // 月額の所定内賃金を求める
+  let monthly;
+  if (d.mode === 'monthly') {
+    monthly = d.basePay;
+  } else {
+    monthly = d.annualMin / 12;
+    notes.push('年収を12で割って月額を推定しています。賞与が年収に含まれる場合、実際の月額はこれより低くなります。');
+  }
+
+  // 固定残業代を差し引く
+  let otDeducted = 0;
+  if (d.fixedOtMode === 'included' || d.fixedOtMode === 'unclear') {
+    otDeducted = d.fixedOtAmount || 0;
+    monthly -= otDeducted;
+  }
+
+  // 金額が明記された固定的手当のみ加算
+  let fixedAllowance = 0;
+  let unstatedCount = 0;
+  let salesAllowanceFlagged = false;
+  for (const a of d.allowances) {
+    if (a.disclosure === 'none') continue;
+    if (a.kind === 'otSuspect') { salesAllowanceFlagged = true; continue; }
+    if (a.kind !== 'fixed') continue;
+    if (a.disclosure === 'stated') fixedAllowance += a.amount;
+    else unstatedCount++;
+  }
+
+  const monthlyHours = (365 - d.holidays) * d.dailyHours / 12;
+  const hourly = (monthly + fixedAllowance) / monthlyHours;
+
+  return { monthly, monthlyHours, fixedAllowance, unstatedCount, salesAllowanceFlagged, hourly, otDeducted, notes };
+}
+
+function scoreTransparency(d, n) {
+  let s = 20; const why = [];
+  if (d.mode === 'annual') { s -= 5; why.push('年収のみで基本給と賞与の内訳が分からない'); }
+  if (d.bonus === 'unstated') { s -= 3; why.push('賞与の金額が書かれていない'); }
+  if (d.fixedOtMode === 'unclear') { s -= 7; why.push('固定残業代が月給に含まれるか不明'); }
+  if (d.fixedOtMode !== 'none' && !d.fixedOtHours) { s -= 5; why.push('固定残業の時間数が書かれていない'); }
+  if (n.unstatedCount > 0) {
+    const cut = Math.min(6, n.unstatedCount * 3);
+    s -= cut; why.push(`手当があると書かれているが金額の記載がない(${n.unstatedCount}件)`);
+  }
+  return { score: Math.max(0, s), max: 20, why };
+}
+
+/**
+ * 実質時給の妥当性(30点満点)
+ *
+ * 採点は地域別の業種相場との比較のみで行う。最低賃金との比較は採点に使わない。
+ * 20〜24歳の業種相場は地域別に見ると最低賃金の中央値1.26倍しかなく、
+ * 最低賃金倍率で採点すると低賃金地域の求人が一律に不利になるため。
+ * 最低賃金は「割れているか」の警告と、相場水準の注記にのみ使う。
+ *
+ * 相場に並んだだけでは満点にしない。相場自体が最低賃金に近い市場では、
+ * 相場並みの求人を満点にすると実態と合わないため。
+ */
+function scoreWage(actualHourlyWage, industryKey, prefKey) {
+  const base = PREF[prefKey][3][industryIndex(industryKey)];
+  const over = (actualHourlyWage / base - 1) * 100; // 相場を何%上回るか
+
+  let score, why;
+  if (over >= 5)        { score = 30; why = `地域相場(${yen(base)}円)を約${Math.round(over)}%上回る`; }
+  else if (over >= -5)  { score = 25; why = `地域相場(${yen(base)}円)並みの水準`; }
+  else if (over >= -20) { score = 18; why = `地域相場より約${Math.round(-over)}%低い`; }
+  else if (over >= -35) { score = 10; why = `地域相場より約${Math.round(-over)}%低く、注意が必要`; }
+  else                  { score = 0;  why = `地域相場より約${Math.round(-over)}%低く、乖離が大きい`; }
+
+  return { score, max: 30, why: [why], base };
+}
+
+/**
+ * 法定労働時間(週40時間)の月換算上限
+ *   40時間 × (365 ÷ 7) ÷ 12 ≒ 173.8時間/月
+ */
+const LEGAL_MONTHLY_HOURS = 40 * (365 / 7) / 12;
+
+/**
+ * 所定労働時間そのものが法定を超えていないかの判定。
+ * 36協定は時間外労働の上限を定めるものなので、所定労働時間が法定を超えていれば
+ * 36協定の有無にかかわらず適法にはならない。最低賃金割れと同じ警告レイヤーで扱う。
+ *
+ * ただし変形労働時間制なら期間平均で判定するため断定はできない。
+ */
+function checkLegalHours(monthlyHours) {
+  if (monthlyHours <= LEGAL_MONTHLY_HOURS) return null;
+  const over = monthlyHours - LEGAL_MONTHLY_HOURS;
+  return `年間休日数と1日の所定労働時間から算出した月間所定労働時間は${monthlyHours.toFixed(1)}時間で、` +
+         `法定労働時間(週40時間、月換算で約${LEGAL_MONTHLY_HOURS.toFixed(1)}時間)を約${over.toFixed(1)}時間超えています。` +
+         `36協定は時間外労働の上限を定めるものなので、所定労働時間がこの水準だと協定の有無にかかわらず問題があります。` +
+         `変形労働時間制の場合は期間平均で判定するため一概に違法とは言えませんが、求人票にその記載があるか確認してください。`;
+}
+
+/**
+ * その地域・業種の相場自体が最低賃金に近い場合の注記。
+ * 点数は動かさず、市場そのものの状況を伝えるために表示する。
+ */
+function marketFloorNotice(industryKey, prefKey) {
+  const base = PREF[prefKey][3][industryIndex(industryKey)];
+  const mw = minWageInEffect(prefKey);
+  if (!mw) return null;
+  const ratio = base / mw.amount;
+  if (ratio >= MARKET_NEAR_FLOOR_RATIO) return null;
+  return `${PREF[prefKey][0]}のこの業種は、相場そのもの(${yen(base)}円)が` +
+         `最低賃金${yen(mw.amount)}円の${ratio.toFixed(2)}倍と下限に近い水準です。` +
+         `相場を満たしていても賃金水準が高いとは限りません。`;
+}
+
+/**
+ * 年間休日数(25点満点)
+ *
+ * 区切りは厚生労働省「令和7年就労条件総合調査」第4表の
+ * 年間休日総数階級別企業割合(統計の階級が10日刻みなのでそれに合わせる)。
+ *   120日以上 39.3% / 110〜119日 21.4% / 100〜109日 27.9%
+ *   90〜99日 5.2% / 90日未満 5.9%
+ * 1企業平均は112.4日で、110〜119日が中央値の帯にあたる。
+ *
+ * 法定労働時間の超過は1日の所定労働時間を加味して別途 checkLegalHours で
+ * 判定するため、ここでは休日数の分布のみで採点する。
+ *
+ * ※労働者1人平均は116.6日で1企業平均より4日多い(休日の多い企業ほど
+ *   労働者数が多いため)。将来、労働者ベースの分布に寄せる余地がある。
+ */
+function scoreHolidays(d) {
+  const h = d.holidays; let s, why;
+  if (h >= 120)      { s = 25; why = '完全週休二日+祝日相当。企業全体の上位39%にあたる水準'; }
+  else if (h >= 110) { s = 20; why = '1企業平均112.4日とほぼ同じ、標準的な水準'; }
+  else if (h >= 100) { s = 13; why = '企業全体の下位39%にあたる水準'; }
+  else if (h >= 90)  { s = 6;  why = '企業全体の下位11%にあたり、休みが取りにくい'; }
+  else               { s = 0;  why = '企業全体の下位6%にあたり、著しく少ない'; }
+  return { score: s, max: 25, why: [`年間休日${h}日 — ${why}`] };
+}
+
+function scoreOvertime(d, n) {
+  let s = 25; const why = [];
+  if (d.fixedOtMode === 'none') {
+    why.push('固定残業代の記載はない');
+  } else {
+    const h = d.fixedOtHours;
+    if (h === null) { s -= 10; why.push('固定残業の時間数が不明で、残業代の扱いを確認できない'); }
+    else if (h <= 20) { why.push(`固定残業${h}時間は許容範囲`); }
+    else if (h < 45) { s -= 5; why.push(`固定残業${h}時間はやや長い`); }
+    else if (h === 45) { s -= 15; why.push('固定残業45時間は36協定の原則上限に張り付いている'); }
+    else { s -= 25; why.push(`固定残業${h}時間は36協定の原則上限(45時間)を超えている`); }
+  }
+  if (n.salesAllowanceFlagged) {
+    s -= 10;
+    why.push('営業手当があり、残業代の代わりになっている可能性がある');
+  }
+  if (d.workSystem === 'discretion') {
+    // 固定残業の時間数不明(-10点)と同格。どちらも残業の実態が求人票から判断できない
+    s -= 10;
+    why.push('裁量労働制のため、実際の労働時間を求人票から読み取れない');
+  }
+  // フレックスタイム制は総労働時間の枠が変わらないため減点しない
+  return { score: Math.max(0, s), max: 25, why };
+}
+
+/**
+ * 総合ランク。
+ *
+ * 2種類の上限を設ける。どちらも「点数が高くても、この求人を良好とは呼べない」
+ * ケースを表示に反映させるためのもの。
+ *
+ *  legalConcern  最低賃金割れ、または所定労働時間が法定を超えている。
+ *                違法の疑いがあるため「要注意」以下に制限する。
+ *                入力ミス(月給と週給の取り違え等)の可能性もあるため、
+ *                最下位までは落とさず点数と理由を併記する。
+ *
+ *  marketNearFloor  その地域・業種の相場自体が最低賃金に近い。
+ *                   相場を満たしていても賃金水準が高いとは限らないため
+ *                   「やや良好」以下に制限する。
+ */
+function rankOf(total, marketNearFloor = false, legalConcern = false) {
+  const natural =
+    total >= 85 ? { name: 'ホワイト', color: 'var(--good)', idx: 3 } :
+    total >= 70 ? { name: 'やや良好', color: 'var(--good)', idx: 2 } :
+    total >= 50 ? { name: '要注意', color: 'var(--caution)', idx: 1 } :
+                  { name: 'ブラック企業疑い', color: 'var(--bad)', idx: 0 };
+
+  let cap = 3;
+  if (marketNearFloor) cap = 2;
+  if (legalConcern) cap = 1;
+  if (natural.idx <= cap) return natural;
+
+  const capped = [
+    { name: 'ブラック企業疑い', color: 'var(--bad)', idx: 0 },
+    { name: '要注意', color: 'var(--caution)', idx: 1 },
+    { name: 'やや良好', color: 'var(--good)', idx: 2 },
+  ][cap];
+  return { ...capped, capped: true, reason: legalConcern
+    ? '違法の疑いがあるため、点数にかかわらずこの判定にとどめています。'
+    : 'この地域・業種は相場自体が最低賃金に近いため、ホワイト判定にはしていません。' };
+}
+
+// ------------------------------------------------------------
+// 結果描画
+// ------------------------------------------------------------
+function render(d, n, cats, total, violation, base, floorNotice, hoursWarning) {
+  const rank = rankOf(total, !!floorNotice, !!violation || !!hoursWarning);
+  const bands = ['var(--bad)', 'var(--caution)', 'var(--good)', 'var(--good)'];
+
+  const hoursHtml = hoursWarning ? `
+    <p class="warn"><strong>所定労働時間が法定を超えています</strong>${hoursWarning}</p>` : '';
+
+  const warnHtml = violation ? `
+    <p class="warn"><strong>最低賃金を下回っています</strong>
+    算出した実質時給は${yen(n.hourly)}円で、${violation.label}の地域別最低賃金${yen(violation.amount)}円を下回ります。
+    月給と週給の取り違えなど入力の誤りかもしれません。まず入力内容をご確認ください。
+    記載どおりであれば、労働基準法違反の疑いがあります。以下のスコアは参考値です。</p>` : '';
+
+  const ledger = [
+    ['満点', '100'],
+    ...cats.map(c => [c.label, c.score === c.max ? '±0' : `−${c.max - c.score}`]),
+  ];
+
+  const catHtml = cats.map(c => `
+    <div class="cat">
+      <h3><span>${c.label}</span><span class="amt">${c.score} / ${c.max}</span></h3>
+      <div class="bar"><i style="width:${c.score / c.max * 100}%;background:${c.score === c.max ? 'var(--good)' : c.score / c.max >= 0.5 ? 'var(--caution)' : 'var(--bad)'}"></i></div>
+      ${c.why.map(w => `<p>${w}</p>`).join('')}
+    </div>`).join('');
+
+  const notes = [...n.notes];
+  if (floorNotice) notes.push(floorNotice);
+  const noteHtml = notes.map(t => `<p style="font-size:13px;color:var(--ink-soft);margin:12px 0 0">${t}</p>`).join('');
+
+  $('result').innerHTML = `
+    ${warnHtml}
+    ${hoursHtml}
+    <div class="verdict">
+      <div class="score" style="color:${rank.color}">${total}<small>/ 100</small></div>
+      <div class="rank" style="color:${rank.color}">${rank.name}</div>
+      <div class="band">${bands.map((c, i) =>
+        `<i style="color:${i === rank.idx ? c : 'var(--rule)'}" class="on"></i>`).join('')}</div>
+      <div class="marker">ブラック企業疑い ／ 要注意 ／ やや良好 ／ ホワイト</div>
+      ${rank.capped ? `<p class="sub" style="margin-top:10px">点数は${total}点ですが、${rank.reason}</p>` : ''}
+    </div>
+    <div class="ledger">
+      <h2>差引の内訳</h2>
+      ${ledger.map(([k, v]) => `<div class="line"><span>${k}</span><span class="amt">${v}</span></div>`).join('')}
+      <div class="line sum"><span>合計</span><span class="amt">${total}</span></div>
+      ${catHtml}
+      ${noteHtml}
+    </div>
+    <div class="facts">
+      <div><span>実質時給</span><span>${yen(n.hourly)}円</span></div>
+      <div><span>月間所定労働時間</span><span>${n.monthlyHours.toFixed(1)}時間</span></div>
+      <div><span>実質賃金に算入した手当</span><span>${yen(n.fixedAllowance)}円</span></div>
+      <div><span>この地域・業種の基準時給</span><span>${yen(base)}円</span></div>
+      <div><span>適用した最低賃金</span><span>${minWageInEffect(d.pref) ? yen(minWageInEffect(d.pref).amount) + '円' : '判定対象外'}</span></div>
+    </div>`;
+}
+
+$('run').addEventListener('click', () => {
+  const err = $('err');
+  const d = collect();
+  const msg = validate(d);
+  if (msg) { err.textContent = msg; err.hidden = false; return; }
+  err.hidden = true;
+
+  const n = normalize(d);
+  const wage = scoreWage(n.hourly, d.industry, d.pref);
+  const cats = [
+    { label: '情報開示の透明性', ...scoreTransparency(d, n) },
+    { label: '実質時給の妥当性', ...wage },
+    { label: '年間休日数', ...scoreHolidays(d) },
+    { label: '残業・固定残業のリスク', ...scoreOvertime(d, n) },
+  ];
+  const total = cats.reduce((sum, c) => sum + c.score, 0);
+
+  const mw = minWageInEffect(d.pref);
+  const violation = mw && n.hourly < mw.amount ? mw : null;
+
+  render(d, n, cats, total, violation, wage.base,
+         marketFloorNotice(d.industry, d.pref), checkLegalHours(n.monthlyHours));
+  if (window.innerWidth <= 900) $('result').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+</script>
+
+<script>
+/*
+ * Service Worker の登録。
+ * 判定基準を更新したときに古い版が居座らないよう、新しい版を検知したら
+ * 更新バーを出して利用者に切り替えてもらう。
+ */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', async () => {
+    try {
+      const reg = await navigator.serviceWorker.register('sw.js');
+
+      const showUpdateBar = worker => {
+        const bar = document.getElementById('updateBar');
+        bar.hidden = false;
+        document.getElementById('updateNow').onclick = () => {
+          worker.postMessage('skip-waiting');
+        };
+      };
+
+      // すでに新しい版が待機している場合
+      if (reg.waiting) showUpdateBar(reg.waiting);
+
+      // 新しい版が見つかった場合
+      reg.addEventListener('updatefound', () => {
+        const nw = reg.installing;
+        if (!nw) return;
+        nw.addEventListener('statechange', () => {
+          // 初回インストール時は通知しない(controller があれば更新)
+          if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+            showUpdateBar(nw);
+          }
+        });
+      });
+
+      // 新しい版に切り替わったら読み込み直す
+      let reloading = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (reloading) return;
+        reloading = true;
+        location.reload();
+      });
+    } catch (e) {
+      // 登録に失敗してもツール本体は通常どおり動く
+      console.warn('Service Worker の登録に失敗しました', e);
+    }
+  });
+}
+</script>
+
+<!-- アクセス解析(Cookieを使わないもの)。導入時に下のコメントを外してトークンを設定する。
+     個人を追跡せず、ページビューと参照元のみを記録する。
+     導入したらプライバシーポリシーの該当箇所も有効化すること。
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js"
+        data-cf-beacon='{"token": "ここにトークン"}'></script>
+-->
