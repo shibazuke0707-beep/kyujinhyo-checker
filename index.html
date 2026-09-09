@@ -42,8 +42,10 @@
     --sans: "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", "Meiryo", sans-serif;
   }
   * { box-sizing: border-box; }
+  html { overflow-x: hidden; }
   body {
     margin: 0;
+    overflow-x: hidden;
     font-family: var(--sans);
     color: var(--ink);
     background: var(--field);
@@ -63,6 +65,9 @@
   header p { margin: 0; color: var(--ink-soft); max-width: 60ch; }
 
   .cols { display: grid; grid-template-columns: 1fr 380px; gap: 28px; align-items: start; }
+  /* グリッドの子は既定で min-width:auto のため、中身が広いとトラックごと
+     はみ出す。長い選択肢を持つ select が横スクロールを生むのを防ぐ */
+  .cols > * { min-width: 0; }
   @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
 
   .sheet {
@@ -85,7 +90,7 @@
   .row + .row { border-top: 1px dotted var(--rule); }
   @media (max-width: 620px) { .row { grid-template-columns: 1fr; gap: 4px; } }
   .row > label:first-child { color: var(--ink-soft); font-size: 14px; }
-  .ctl { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .ctl { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 0; }
 
   input[type=number], input[type=text], select {
     font: inherit;
@@ -96,9 +101,10 @@
     border-radius: 3px;
     padding: 6px 9px;
     min-width: 0;
+    max-width: 100%;
   }
-  input[type=number] { width: 120px; text-align: right; }
-  select { padding-right: 26px; }
+  input[type=number] { width: 120px; text-align: right; max-width: 100%; }
+  select { padding-right: 26px; max-width: 100%; }
   input:focus-visible, select:focus-visible, button:focus-visible {
     outline: 2px solid var(--navy);
     outline-offset: 1px;
@@ -115,7 +121,12 @@
 
   .allow { display: grid; grid-template-columns: 130px auto 1fr; gap: 10px; align-items: center; padding: 7px 0; }
   .allow + .allow { border-top: 1px dotted var(--rule); }
-  @media (max-width: 620px) { .allow { grid-template-columns: 1fr; gap: 4px; } }
+  @media (max-width: 620px) {
+    .allow { grid-template-columns: 1fr; gap: 4px; }
+    select { width: 100%; }
+    .ctl > select { flex: 1 1 100%; }
+  }
+  .allow > * { min-width: 0; }
   .allow > span:first-child { font-size: 14px; color: var(--ink-soft); }
   .allow .flag { font-size: 12px; color: var(--caution); }
 
@@ -140,6 +151,7 @@
 
   .verdict { padding: 26px 26px 22px; border-bottom: 1px solid var(--rule); }
   .score { font-family: var(--serif); font-size: 62px; line-height: 1; font-weight: 600; }
+  @media (max-width: 400px) { .score { font-size: 52px; } }
   .score small { font-size: 18px; color: var(--ink-soft); margin-left: 4px; }
   .rank { font-family: var(--serif); font-size: 20px; margin-top: 8px; }
   .band { display: flex; height: 5px; margin-top: 16px; border-radius: 3px; overflow: hidden; }
@@ -159,6 +171,7 @@
   .ledger { padding: 22px 26px 26px; }
   .ledger h2 { font-family: var(--serif); font-size: 16px; font-weight: 600; margin: 0 0 12px; }
   .line { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; font-size: 14px; border-bottom: 1px dotted var(--rule); }
+  .line > span:first-child { min-width: 0; overflow-wrap: anywhere; }
   .line:last-child { border-bottom: 0; }
   .line .amt { font-variant-numeric: tabular-nums; white-space: nowrap; }
   .line.sum { border-top: 1px solid var(--ink); border-bottom: 0; margin-top: 6px; padding-top: 10px; font-weight: 600; }
@@ -168,7 +181,8 @@
   .cat .bar i { display: block; height: 100%; }
   .cat p { margin: 6px 0 0; font-size: 13px; color: var(--ink-soft); }
   .facts { padding: 0 26px 26px; font-size: 13px; color: var(--ink-soft); }
-  .facts div { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px dotted var(--rule); }
+  .facts div { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px dotted var(--rule); }
+  .facts div > span:first-child { min-width: 0; overflow-wrap: anywhere; }
 
   #updateBar {
     background: var(--navy); color: var(--paper);
@@ -205,7 +219,10 @@
         <p class="hint">業種と勤務地は、相場比較と最低賃金の判定に使います。</p>
         <div class="row">
           <label for="industry">業種</label>
-          <div class="ctl"><select id="industry"></select></div>
+          <div class="ctl">
+            <select id="industry"></select>
+            <p class="sub" id="industryHint"></p>
+          </div>
         </div>
         <div class="row">
           <label for="pref">勤務地(都道府県)</label>
@@ -461,9 +478,15 @@ const KIND_NOTE = {
 // ------------------------------------------------------------
 const $ = id => document.getElementById(id);
 
+// 選択肢には分類名だけを載せる。具体例まで入れると選択肢が長くなり、
+// select の幅が画面を超えて横スクロールの原因になるため、選択後に下へ表示する。
 $('industry').innerHTML = '<option value="">選択してください</option>' +
-  INDUSTRIES.map(([k, label, ex]) =>
-    `<option value="${k}">${label}${ex ? `(${ex})` : ''}</option>`).join('');
+  INDUSTRIES.map(([k, label]) => `<option value="${k}">${label}</option>`).join('');
+
+$('industry').addEventListener('change', e => {
+  const found = INDUSTRIES.find(([k]) => k === e.target.value);
+  $('industryHint').textContent = found && found[2] ? `例:${found[2]}` : '';
+});
 
 $('pref').innerHTML = '<option value="">選択してください</option>' +
   Object.entries(PREF).map(([k, v]) => `<option value="${k}">${v[0]}</option>`).join('');
