@@ -119,6 +119,21 @@
   .seg input:checked + span { color: var(--paper); }
   .seg label:has(input:checked) { background: var(--navy); color: var(--paper); }
 
+  textarea {
+    font: inherit; font-size: 14px; line-height: 1.7;
+    width: 100%; margin-top: 12px;
+    color: var(--ink); background: var(--paper);
+    border: 1px solid var(--rule-strong); border-radius: 3px;
+    padding: 10px 12px; resize: vertical;
+  }
+  .pasteact { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .filled {
+    display: inline-block; font-size: 11px; line-height: 1.6;
+    background: #e8eef7; color: var(--navy);
+    border-radius: 3px; padding: 1px 7px; margin-left: 8px;
+    vertical-align: 1px; white-space: nowrap;
+  }
+
   .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
   .chip {
     font: inherit; font-size: 13px;
@@ -254,6 +269,20 @@
 
   <div class="cols">
     <div class="sheet">
+
+      <fieldset>
+        <legend>入力の方法</legend>
+        <p class="hint">求人ページの本文を貼り付けると、読み取れる項目を自動で埋めます。読み取った内容は下書きなので、間違っていればそのまま直せます。</p>
+        <button type="button" class="addchip" id="openPaste">求人ページから読み取る</button>
+        <div id="pastePanel" hidden>
+          <textarea id="pasteText" rows="8" placeholder="求人ページの本文をここに貼り付けてください。給与・勤務時間・年間休日・手当などが含まれている範囲をまるごと貼るのが確実です。"></textarea>
+          <div class="pasteact">
+            <button type="button" class="run" id="doParse">読み取る</button>
+            <button type="button" class="addchip" id="closePaste">閉じる</button>
+          </div>
+          <p class="sub" id="parseResult"></p>
+        </div>
+      </fieldset>
 
       <fieldset>
         <legend>この求人について</legend>
@@ -987,6 +1016,353 @@ function render(d, n, cats, total, violation, base, floorNotice, hoursWarning) {
       <div><span>適用した最低賃金</span><span>${minWageInEffect(d.pref) ? yen(minWageInEffect(d.pref).amount) + '円' : '判定対象外'}</span></div>
     </div>`;
 }
+
+// ============================================================
+// 求人ページの読み取り
+/*
+ * 求人ページの文面から各項目を読み取る。
+ *
+ * 最重要の原則: 読み取れなかった項目は空欄のまま返す。
+ * このツールは「書かれていないこと」を減点する仕組みなので、
+ * 推測で埋めると本来つくはずの減点が消えてしまう。
+ * 判断に迷うケースでは埋めない。抽出漏れは利用者が手で補えるが、
+ * 誤った自動入力は気づかれずに点数を歪める。
+ *
+ * 業種は求人ページに産業分類が書かれていないため自動入力しない。
+ */
+
+const PREF_NAMES = [
+  ['hokkaido','北海道'],['aomori','青森'],['iwate','岩手'],['miyagi','宮城'],
+  ['akita','秋田'],['yamagata','山形'],['fukushima','福島'],['ibaraki','茨城'],
+  ['tochigi','栃木'],['gunma','群馬'],['saitama','埼玉'],['chiba','千葉'],
+  ['tokyo','東京'],['kanagawa','神奈川'],['niigata','新潟'],['toyama','富山'],
+  ['ishikawa','石川'],['fukui','福井'],['yamanashi','山梨'],['nagano','長野'],
+  ['gifu','岐阜'],['shizuoka','静岡'],['aichi','愛知'],['mie','三重'],
+  ['shiga','滋賀'],['kyoto','京都'],['osaka','大阪'],['hyogo','兵庫'],
+  ['nara','奈良'],['wakayama','和歌山'],['tottori','鳥取'],['shimane','島根'],
+  ['okayama','岡山'],['hiroshima','広島'],['yamaguchi','山口'],['tokushima','徳島'],
+  ['kagawa','香川'],['ehime','愛媛'],['kochi','高知'],['fukuoka','福岡'],
+  ['saga','佐賀'],['nagasaki','長崎'],['kumamoto','熊本'],['oita','大分'],
+  ['miyazaki','宮崎'],['kagoshima','鹿児島'],['okinawa','沖縄'],
+];
+
+const ALLOWANCE_KEYWORDS = [
+  ['housing',   /住宅手当|家賃補助|住宅補助|家賃手当/],
+  ['regional',  /地域手当/],
+  ['qualif',    /資格手当|免許手当/],
+  ['position',  /役職手当|管理職手当/],
+  ['skill',     /技能手当|技術手当/],
+  ['meal',      /食事手当|食費補助|食事補助/],
+  ['sales',     /営業手当/],
+  ['commuting', /通勤手当|交通費/],
+  ['family',    /家族手当|扶養手当/],
+  ['attend',    /皆勤手当|精勤手当/],
+  ['nightduty', /夜勤手当|交替勤務手当|交代勤務手当/],
+  ['remote',    /在宅勤務手当|テレワーク手当|通信手当/],
+];
+
+/** 全角数字と記号を半角に寄せ、桁区切りを外す */
+function normalizeText(s) {
+  return s
+    .replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .replace(/[（）：〜～－―ｰ]/g, c =>
+      ({ '（': '(', '）': ')', '：': ':', '〜': '~', '～': '~',
+         '－': '-', '―': '-', 'ｰ': '-' }[c]))
+    .replace(/,(?=\d{3}\b)/g, '');
+}
+
+/** 「25万」「250000」「25.5万」を円に直す */
+function toYen(numStr, unit) {
+  const n = parseFloat(numStr);
+  if (!Number.isFinite(n)) return null;
+  return unit && unit.includes('万') ? Math.round(n * 10000) : Math.round(n);
+}
+
+/**
+ * キーワードの直後から、区切り文字までを切り出す。
+ * 前方も含めて探すと手前にある別の金額(月給など)を拾ってしまうため、
+ * 必ず後方だけを見る。
+ */
+function clauseAfter(text, index, maxLen, delimiters) {
+  const seg = text.slice(index, Math.min(text.length, index + maxLen));
+  const m = delimiters.exec(seg);
+  return m ? seg.slice(0, m.index) : seg;
+}
+
+/** 該当箇所の前後を切り出して根拠として示す */
+function evidenceOf(text, index, length) {
+  const s = Math.max(0, index - 12);
+  const e = Math.min(text.length, index + length + 12);
+  return (s > 0 ? '…' : '') + text.slice(s, e).replace(/\s+/g, ' ') + (e < text.length ? '…' : '');
+}
+
+/**
+ * 複数のパターンを優先順に試し、最初に当たったものを返す。
+ * すべて外れたら null を返す(空欄のままにする)。
+ */
+function firstMatch(text, patterns, build) {
+  for (const re of patterns) {
+    const m = re.exec(text);
+    if (m) {
+      const v = build(m);
+      if (v !== null && v !== undefined) {
+        return { ...v, evidence: evidenceOf(text, m.index, m[0].length) };
+      }
+    }
+  }
+  return null;
+}
+
+function parseJobPosting(raw) {
+  const text = normalizeText(raw);
+  const out = {};
+
+  // ---- 都道府県 ----
+  for (const [key, name] of PREF_NAMES) {
+    const re = new RegExp(name + '(都|道|府|県)');
+    const m = re.exec(text);
+    if (m) { out.pref = { value: key, evidence: evidenceOf(text, m.index, m[0].length) }; break; }
+  }
+
+  // ---- 年間休日 ----
+  out.holidays = firstMatch(text, [
+    /年間休日[^0-9]{0,8}(\d{2,3})\s*日/,
+    /休日[^0-9]{0,4}年間\s*(\d{2,3})\s*日/,
+    /年間\s*(\d{2,3})\s*日\s*休/,
+  ], m => {
+    const n = parseInt(m[1], 10);
+    return n >= 60 && n <= 200 ? { value: n } : null;   // 常識的な範囲のみ採用
+  });
+
+  // ---- 1日の所定労働時間 ----
+  out.dailyHours = firstMatch(text, [
+    /(?:1日|一日|所定労働時間)[^0-9]{0,8}(\d{1,2}(?:\.\d)?)\s*時間/,
+    /実働\s*(\d{1,2}(?:\.\d)?)\s*時間/,
+  ], m => {
+    const n = parseFloat(m[1]);
+    return n >= 1 && n <= 16 ? { value: n } : null;
+  });
+
+  // 勤務時間と休憩から算出する(「9:00-18:00 休憩60分」など)
+  if (!out.dailyHours) {
+    const m = /(\d{1,2}):(\d{2})\s*[-~]\s*(\d{1,2}):(\d{2})/.exec(text);
+    if (m) {
+      let mins = (+m[3] * 60 + +m[4]) - (+m[1] * 60 + +m[2]);
+      if (mins < 0) mins += 24 * 60;                       // 夜勤などの日跨ぎ
+      const br = /休憩[^0-9]{0,4}(\d{1,3})\s*分/.exec(text);
+      const bh = /休憩[^0-9]{0,4}(\d(?:\.\d)?)\s*時間/.exec(text);
+      if (br) mins -= parseInt(br[1], 10);
+      else if (bh) mins -= parseFloat(bh[1]) * 60;
+      const h = Math.round(mins / 60 * 4) / 4;             // 15分単位に丸める
+      if (h >= 1 && h <= 16) {
+        out.dailyHours = { value: h, evidence: evidenceOf(text, m.index, m[0].length) };
+      }
+    }
+  }
+
+  // ---- 年収 ----
+  const annual = firstMatch(text, [
+    /年収[^0-9]{0,6}(\d{3,4}(?:\.\d)?)\s*(万円|万|円)?\s*[-~]\s*(\d{3,4}(?:\.\d)?)\s*(万円|万|円)?/,
+    /年収[^0-9]{0,6}(\d{3,8}(?:\.\d)?)\s*(万円|万|円)/,
+  ], m => {
+    const lo = toYen(m[1], m[2] || '万');
+    const hi = m[3] ? toYen(m[3], m[4] || m[2] || '万') : null;
+    return lo && lo >= 500000 ? { value: lo, max: hi } : null;
+  });
+  if (annual) out.annual = annual;
+
+  // ---- 月給・基本給 ----
+  out.basePay = firstMatch(text, [
+    /基本給[^0-9]{0,8}(\d{1,3}(?:\.\d)?|\d{5,7})\s*(万円|万|円)/,
+    /月給[^0-9]{0,8}(\d{1,3}(?:\.\d)?|\d{5,7})\s*(万円|万|円)/,
+    /月額[^0-9]{0,8}(\d{1,3}(?:\.\d)?|\d{5,7})\s*(万円|万|円)/,
+  ], m => {
+    const v = toYen(m[1], m[2]);
+    return v && v >= 100000 && v <= 2000000 ? { value: v } : null;
+  });
+
+  // ---- 固定残業代 ----
+  const fixedOtRe = /(固定残業|みなし残業|定額残業|固定時間外|みなし時間外)/;
+  const fx = fixedOtRe.exec(text);
+  if (fx) {
+    // キーワードより後ろだけを見る。手前を含めると月給の金額を拾ってしまう。
+    const around = clauseAfter(text, fx.index, 60, /[。\n【\r]/);
+
+    const hm = /(\d{1,3}(?:\.\d)?)\s*時間/.exec(around);
+    if (hm) {
+      const n = parseFloat(hm[1]);
+      // 「所定労働時間8時間」のような別項目を拾っていないか確かめる
+      const before = around.slice(Math.max(0, hm.index - 8), hm.index);
+      if (n > 0 && n <= 200 && !/所定労働|実働|1日|一日/.test(before)) {
+        out.fixedOtHours = { value: n, evidence: evidenceOf(text, fx.index, fx[0].length) };
+      }
+    }
+
+    const am = /(\d{1,3}(?:\.\d)?|\d{4,7})\s*(万円|万|円)/.exec(around);
+    if (am) {
+      const v = toYen(am[1], am[2]);
+      // 月給と同額なら、給与の数値を誤って拾っている
+      const basePay = out.basePay?.value;
+      if (v && v >= 1000 && v <= 1000000 && v !== basePay) {
+        out.fixedOtAmount = { value: v, evidence: evidenceOf(text, fx.index, fx[0].length) };
+      }
+    }
+
+    // 「含む」と「別途」で実質時給の計算が変わる。どちらとも読めなければ不明にする。
+    // 不明は減点対象なので、迷ったら不明にしておくのが安全側。
+    let mode = 'unclear';
+    if (/(含む|含み|込み|込む|内|を含|含んで)/.test(around)) mode = 'included';
+    else if (/(別途|別に|加算|上乗せ|全額支給)/.test(around)) mode = 'separate';
+    out.fixedOtMode = { value: mode, evidence: evidenceOf(text, fx.index, fx[0].length) };
+  } else if (/(残業代|時間外手当|時間外労働).{0,12}(全額支給|別途支給|全額別途)/.test(text)) {
+    const m = /(残業代|時間外手当|時間外労働).{0,12}(全額支給|別途支給|全額別途)/.exec(text);
+    out.fixedOtMode = { value: 'none', evidence: evidenceOf(text, m.index, m[0].length) };
+  }
+
+  // ---- 賞与 ----
+  out.bonus = firstMatch(text, [
+    /賞与[^。\n]{0,20}?(なし|無し|支給なし)/,
+    /賞与[^。\n]{0,24}?(\d(?:\.\d)?\s*(?:か|ヶ|ケ|箇)?月分|\d{2,4}\s*万円|\d{5,7}\s*円)/,
+    /(賞与|ボーナス)[^。\n]{0,20}?(年\s*\d\s*回|あり|支給)/,
+  ], m => {
+    if (/なし|無し|支給なし/.test(m[0])) return { value: 'none' };
+    // 月数や金額が書かれていれば stated、回数だけなら金額不明
+    if (/月分|万円|\d{5,7}\s*円/.test(m[0])) return { value: 'stated' };
+    return { value: 'unstated' };
+  });
+
+  // ---- 勤務制度 ----
+  if (/裁量労働/.test(text)) {
+    const m = /裁量労働/.exec(text);
+    out.workSystem = { value: 'discretion', evidence: evidenceOf(text, m.index, m[0].length) };
+  } else if (/フレックス/.test(text)) {
+    const m = /フレックス/.exec(text);
+    out.workSystem = { value: 'flex', evidence: evidenceOf(text, m.index, m[0].length) };
+  }
+
+  // ---- 手当 ----
+  // 名称は拾えても金額まで書かれているとは限らない。
+  // 金額が読めなければ空欄のままにし、情報開示の問題として扱わせる。
+  out.allowances = [];
+  for (const [id, re] of ALLOWANCE_KEYWORDS) {
+    const m = re.exec(text);
+    if (!m) continue;
+    if (/(なし|無し|支給なし)/.test(text.slice(m.index, m.index + m[0].length + 6))) continue;
+
+    // 手当名の直後、区切りまでの範囲だけを見る。
+    // 「家族手当、役職手当(月3万円)」で家族手当に3万円が付くのを防ぐ。
+    const around = clauseAfter(text, m.index, 30, /[、。\n【※・]/);
+    const am = /(\d{1,3}(?:\.\d)?|\d{4,7})\s*(万円|万|円)/.exec(around);
+    let amount = null;
+    if (am) {
+      const v = toYen(am[1], am[2]);
+      if (v && v >= 1000 && v <= 500000) amount = v;
+    }
+    out.allowances.push({
+      id, amount, evidence: evidenceOf(text, m.index, m[0].length),
+    });
+  }
+
+  return out;
+}
+
+
+// ------------------------------------------------------------
+// 読み取り結果をフォームに反映する
+// ------------------------------------------------------------
+
+/** 読み取った項目に印を付ける。利用者が手で直したら印は消す */
+function markFilled(fieldId, evidence) {
+  const label = document.querySelector(`label[for="${fieldId}"]`);
+  if (!label || label.querySelector('.filled')) return;
+  const tag = document.createElement('span');
+  tag.className = 'filled';
+  tag.textContent = '読み取り';
+  if (evidence) tag.title = evidence;
+  label.appendChild(tag);
+
+  const input = $(fieldId);
+  if (input) {
+    input.addEventListener('input', () => tag.remove(), { once: true });
+    input.addEventListener('change', () => tag.remove(), { once: true });
+  }
+}
+
+function clearFilledMarks() {
+  document.querySelectorAll('.filled').forEach(e => e.remove());
+}
+
+$('openPaste').addEventListener('click', () => {
+  $('pastePanel').hidden = false;
+  $('pasteText').focus();
+});
+$('closePaste').addEventListener('click', () => { $('pastePanel').hidden = true; });
+
+$('doParse').addEventListener('click', () => {
+  const raw = $('pasteText').value;
+  if (!raw.trim()) { $('parseResult').textContent = '求人ページの本文を貼り付けてください。'; return; }
+
+  clearFilledMarks();
+  const r = parseJobPosting(raw);
+  const filled = [];
+
+  const set = (fieldId, hit, label, transform = v => v) => {
+    if (!hit) return;
+    $(fieldId).value = transform(hit.value);
+    markFilled(fieldId, hit.evidence);
+    filled.push(label);
+  };
+
+  set('pref', r.pref, '勤務地');
+  set('holidays', r.holidays, '年間休日');
+  set('dailyHours', r.dailyHours, '1日の所定労働時間');
+  set('bonus', r.bonus, '賞与');
+  set('workSystem', r.workSystem, '勤務制度');
+  set('fixedOtMode', r.fixedOtMode, '固定残業代の有無');
+  set('fixedOtHours', r.fixedOtHours, '固定残業の時間数');
+  set('fixedOtAmount', r.fixedOtAmount, '固定残業代の金額');
+
+  // 給与は月給と年収で入力方式が変わる。月給があればそちらを優先する
+  if (r.basePay) {
+    document.querySelector('input[name=paymode][value=monthly]').checked = true;
+    $('modeMonthly').hidden = false; $('modeAnnual').hidden = true;
+    set('basePay', r.basePay, '基本給');
+  } else if (r.annual) {
+    document.querySelector('input[name=paymode][value=annual]').checked = true;
+    $('modeMonthly').hidden = true; $('modeAnnual').hidden = false;
+    set('annualMin', r.annual, '年収');
+    if (r.annual.max) $('annualMax').value = r.annual.max;
+  }
+
+  // 手当は該当するチップを選択状態にし、金額が読めたものだけ埋める
+  if (r.allowances.length) {
+    allowanceRows.length = 0;
+    for (const a of r.allowances) {
+      const p = ALLOWANCE_PRESETS.find(x => x.id === a.id);
+      if (!p) continue;
+      allowanceRows.push({
+        key: p.id, label: p.label, kind: p.kind, custom: false,
+        amount: a.amount == null ? '' : String(a.amount),
+      });
+    }
+    renderChips(); renderRows();
+    filled.push(`手当${r.allowances.length}件`);
+  }
+
+  const missing = [];
+  if (!r.pref) missing.push('勤務地');
+  if (!r.basePay && !r.annual) missing.push('給与');
+  if (!r.holidays) missing.push('年間休日');
+  if (!r.dailyHours) missing.push('1日の所定労働時間');
+
+  $('parseResult').innerHTML =
+    (filled.length
+      ? `読み取れた項目:${filled.join('、')}。`
+      : '読み取れる項目が見つかりませんでした。') +
+    (missing.length ? `<br>読み取れなかったため手入力が必要:${missing.join('、')}。` : '') +
+    '<br>業種は求人ページに書かれていないため、必ずご自身で選んでください。' +
+    '<br>読み取り内容が求人票と違っていたら、そのまま書き換えてください。';
+});
 
 $('run').addEventListener('click', () => {
   const err = $('err');
