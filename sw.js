@@ -13,7 +13,7 @@
  * 上げ忘れると古いキャッシュが残り続ける。
  */
 
-const CACHE_VERSION = 'v1-2026-09';
+const CACHE_VERSION = 'v3-2026-09';
 const CACHE_NAME = `kyujinhyo-checker-${CACHE_VERSION}`;
 
 // オフラインでも開けるように、最初に取り込んでおくもの
@@ -23,6 +23,8 @@ const PRECACHE = [
   './privacy.html',
   './manifest.webmanifest',
   './assets/favicon.svg',
+  './assets/favicon-32.png',
+  './assets/favicon-16.png',
   './assets/icon-192.png',
   './assets/icon-512.png',
   './assets/apple-touch-icon.png',
