@@ -119,6 +119,47 @@
   .seg input:checked + span { color: var(--paper); }
   .seg label:has(input:checked) { background: var(--navy); color: var(--paper); }
 
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .chip {
+    font: inherit; font-size: 13px;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--rule-strong); border-radius: 999px;
+    padding: 6px 14px; cursor: pointer;
+    transition: background .12s, color .12s, border-color .12s;
+  }
+  .chip:hover { border-color: var(--navy); }
+  .chip[aria-pressed="true"] { background: var(--navy); color: var(--paper); border-color: var(--navy); }
+  .addchip {
+    font: inherit; font-size: 13px;
+    background: var(--field); color: var(--navy);
+    border: 1px dashed var(--rule-strong); border-radius: 999px;
+    padding: 6px 14px; cursor: pointer;
+    transition: background .12s, color .12s;
+  }
+  .addchip.flash { background: var(--navy); color: var(--paper); border-style: solid; }
+
+  .arow {
+    display: grid; grid-template-columns: 1fr 130px auto;
+    gap: 10px; align-items: center;
+    padding: 10px 0; border-top: 1px dotted var(--rule);
+  }
+  .arow > * { min-width: 0; }
+  .arow:first-child { border-top: 1px solid var(--rule); margin-top: 14px; }
+  .arow .aname { font-size: 14px; }
+  .arow input.aname { width: 100%; }
+  .arow .anature { grid-column: 1 / -1; margin: 0; }
+  .arow .del {
+    font: inherit; font-size: 18px; line-height: 1;
+    background: none; border: 0; color: var(--ink-soft);
+    cursor: pointer; padding: 4px 8px; border-radius: 3px;
+  }
+  .arow .del:hover { color: var(--bad); background: var(--field); }
+  @media (max-width: 620px) {
+    .arow { grid-template-columns: 1fr auto; }
+    .arow input[type=number] { grid-column: 1 / 2; }
+    .arow .del { grid-column: 2 / 3; grid-row: 2; }
+  }
+
   .allow { display: grid; grid-template-columns: 130px auto 1fr; gap: 10px; align-items: center; padding: 7px 0; }
   .allow + .allow { border-top: 1px dotted var(--rule); }
   @media (max-width: 620px) {
@@ -304,8 +345,14 @@
 
       <fieldset>
         <legend>手当</legend>
-        <p class="hint">金額が書かれている固定的な手当だけを実質時給に加算します。金額不明のものは加算せず、情報開示の問題として扱います。</p>
-        <div id="allowances"></div>
+        <p class="hint">求人票に書かれている手当を選んでください。毎月かならず同じ額が支給される手当だけを実質時給に加算します。金額が書かれていない場合は空欄のままで構いません(情報開示の問題として扱います)。</p>
+        <div class="chips" id="allowanceChips"></div>
+        <button type="button" class="addchip" id="addCustom">＋ その他の手当を追加</button>
+        <div id="allowanceRows"></div>
+        <p class="hint" style="margin:16px 0 0">
+          深夜手当・休日手当・時間外手当は入力しないでください。法律で支払いが義務づけられた割増賃金であり、
+          労働時間に対する対価なので、実質時給に加えると二重に数えることになります。
+        </p>
       </fieldset>
 
       <fieldset>
@@ -458,19 +505,41 @@ const MARKET_NEAR_FLOOR_RATIO = 1.15;
 //  variable : 実費補填・条件付きのため算入しない
 //  otSuspect: 固定残業代の代替に使われている疑い。算入せず残業リスクで減点
 // ============================================================
-const ALLOWANCES = [
-  { id: 'housing',   label: '住宅手当・家賃補助', kind: 'fixed' },
-  { id: 'regional',  label: '地域手当',          kind: 'fixed' },
-  { id: 'qualif',    label: '資格手当',          kind: 'fixed' },
-  { id: 'sales',     label: '営業手当',          kind: 'otSuspect' },
-  { id: 'commuting', label: '通勤手当',          kind: 'variable' },
-  { id: 'family',    label: '家族手当',          kind: 'variable' },
-  { id: 'attend',    label: '皆勤手当',          kind: 'variable' },
+/*
+ * 手当の分類
+ *   fixed     : 毎月かならず同じ額が支給される。実質賃金に算入する
+ *   variable  : 実費補填や条件付きで、支給されない月がある。算入しない
+ *   otSuspect : 固定残業代の代わりに使われている疑いがある。算入せず残業リスクで減点
+ *
+ * 深夜手当・休日手当・時間外手当はここに含めない。法定の割増賃金であり
+ * 労働時間に対する対価なので、実質時給に算入すると二重計上になる。
+ */
+const ALLOWANCE_PRESETS = [
+  { id: 'housing',   label: '住宅・家賃補助',   kind: 'fixed' },
+  { id: 'regional',  label: '地域手当',         kind: 'fixed' },
+  { id: 'qualif',    label: '資格手当',         kind: 'fixed' },
+  { id: 'position',  label: '役職手当',         kind: 'fixed' },
+  { id: 'skill',     label: '技能手当',         kind: 'fixed' },
+  { id: 'meal',      label: '食事手当',         kind: 'fixed' },
+  { id: 'sales',     label: '営業手当',         kind: 'otSuspect' },
+  { id: 'commuting', label: '通勤手当',         kind: 'variable' },
+  { id: 'family',    label: '家族手当',         kind: 'variable' },
+  { id: 'attend',    label: '皆勤・精勤手当',   kind: 'variable' },
+  { id: 'nightduty', label: '夜勤・交替勤務',   kind: 'variable' },
+  { id: 'remote',    label: '在宅勤務・通信',   kind: 'variable' },
 ];
+
+// 自由入力の手当は、利用者が求人票を見て答えられる形で性質を尋ねる
+const NATURE_OPTIONS = [
+  ['fixed',     '毎月かならず同じ額が支給される'],
+  ['variable',  '条件を満たした月だけ支給される'],
+  ['otSuspect', '残業代の代わりかもしれない'],
+];
+
 const KIND_NOTE = {
-  fixed: '金額の記載があれば実質時給に加算します',
-  variable: '実費補填や条件付きのため、実質時給には加算しません',
-  otSuspect: '残業代の代わりに使われている場合があるため加算しません',
+  fixed: '実質時給に加算します',
+  variable: '条件付きのため加算しません',
+  otSuspect: '残業代の代わりの可能性があるため加算しません',
 };
 
 // ------------------------------------------------------------
@@ -491,29 +560,109 @@ $('industry').addEventListener('change', e => {
 $('pref').innerHTML = '<option value="">選択してください</option>' +
   Object.entries(PREF).map(([k, v]) => `<option value="${k}">${v[0]}</option>`).join('');
 
-$('allowances').innerHTML = ALLOWANCES.map(a => `
-  <div class="allow">
-    <span>${a.label}</span>
-    <select id="al_${a.id}" data-allow="${a.id}">
-      <option value="none">なし・記載なし</option>
-      <option value="unstated">あり(金額の記載なし)</option>
-      <option value="stated">あり(金額の記載あり)</option>
-    </select>
-    <span class="ctl">
-      <input type="number" id="am_${a.id}" min="0" step="1000" placeholder="金額" disabled>
-      <span class="unit">円/月</span>
-      <span class="flag" id="af_${a.id}"></span>
-    </span>
-  </div>`).join('');
+/*
+ * 手当の入力。チップを押すと選択状態になり、下に金額欄が現れる。
+ * もう一度押すと解除されて欄が消える。選択部分の高さが変わらないので、
+ * 操作するたびに画面が上下に跳ねることがない。
+ */
+const allowanceRows = [];   // { key, label, kind, custom }
+let customSeq = 0;
 
-for (const a of ALLOWANCES) {
-  $(`al_${a.id}`).addEventListener('change', e => {
-    const stated = e.target.value === 'stated';
-    $(`am_${a.id}`).disabled = !stated;
-    if (!stated) $(`am_${a.id}`).value = '';
-    $(`af_${a.id}`).textContent = e.target.value === 'none' ? '' : KIND_NOTE[a.kind];
-  });
+function renderChips() {
+  $('allowanceChips').innerHTML = ALLOWANCE_PRESETS.map(a => {
+    const on = allowanceRows.some(r => r.key === a.id);
+    return `<button type="button" class="chip" data-preset="${a.id}"
+             aria-pressed="${on}">${a.label}</button>`;
+  }).join('');
 }
+
+function renderRows() {
+  $('allowanceRows').innerHTML = allowanceRows.map(r => {
+    const name = r.custom
+      ? `<input type="text" class="aname" data-name="${r.key}"
+                placeholder="手当の名称" value="${r.label.replace(/"/g, '&quot;')}">`
+      : `<span class="aname">${r.label}</span>`;
+    const nature = r.custom
+      ? `<div class="ctl anature"><select data-nature="${r.key}">${
+          NATURE_OPTIONS.map(([v, t]) =>
+            `<option value="${v}"${v === r.kind ? ' selected' : ''}>${t}</option>`).join('')
+        }</select></div>`
+      : `<p class="sub anature">${KIND_NOTE[r.kind]}</p>`;
+    return `<div class="arow">
+      ${name}
+      <input type="number" data-amount="${r.key}" min="0" step="1000"
+             placeholder="金額" value="${r.amount ?? ''}">
+      <button type="button" class="del" data-del="${r.key}" aria-label="削除">×</button>
+      ${nature}
+    </div>`;
+  }).join('');
+}
+
+function syncRowState() {
+  // 再描画で入力値が消えないよう、描画前に現在の値を控える
+  for (const r of allowanceRows) {
+    const amt = document.querySelector(`[data-amount="${r.key}"]`);
+    if (amt) r.amount = amt.value;
+    const nm = document.querySelector(`[data-name="${r.key}"]`);
+    if (nm) r.label = nm.value;
+    const nt = document.querySelector(`[data-nature="${r.key}"]`);
+    if (nt) r.kind = nt.value;
+  }
+}
+
+function refreshAllowances() {
+  syncRowState();
+  renderChips();
+  renderRows();
+}
+
+$('allowanceChips').addEventListener('click', e => {
+  const btn = e.target.closest('[data-preset]');
+  if (!btn) return;
+  const id = btn.dataset.preset;
+  syncRowState();
+  const i = allowanceRows.findIndex(r => r.key === id);
+  if (i >= 0) {
+    allowanceRows.splice(i, 1);
+  } else {
+    const p = ALLOWANCE_PRESETS.find(a => a.id === id);
+    allowanceRows.push({ key: p.id, label: p.label, kind: p.kind, custom: false, amount: '' });
+  }
+  renderChips();
+  renderRows();
+});
+
+$('addCustom').addEventListener('click', e => {
+  // 押すたびに欄が増える。押した合図として一瞬だけ色を変える
+  const btn = e.currentTarget;
+  btn.classList.add('flash');
+  setTimeout(() => btn.classList.remove('flash'), 160);
+
+  syncRowState();
+  allowanceRows.push({
+    key: `custom-${++customSeq}`, label: '', kind: 'fixed', custom: true, amount: ''
+  });
+  renderRows();
+  // 追加した欄の名称にすぐ入力できるようにする
+  const inputs = $('allowanceRows').querySelectorAll('input.aname');
+  if (inputs.length) inputs[inputs.length - 1].focus();
+});
+
+$('allowanceRows').addEventListener('click', e => {
+  const btn = e.target.closest('[data-del]');
+  if (!btn) return;
+  syncRowState();
+  const i = allowanceRows.findIndex(r => r.key === btn.dataset.del);
+  if (i >= 0) allowanceRows.splice(i, 1);
+  renderChips();
+  renderRows();
+});
+
+$('allowanceRows').addEventListener('change', e => {
+  if (e.target.matches('[data-nature]')) refreshAllowances();
+});
+
+renderChips();
 
 document.querySelectorAll('input[name=paymode]').forEach(r => {
   r.addEventListener('change', () => {
@@ -532,10 +681,11 @@ function collect() {
   const mode = document.querySelector('input[name=paymode]:checked').value;
   const num = id => { const v = $(id).value.trim(); return v === '' ? null : Number(v); };
 
-  const allowances = ALLOWANCES.map(a => ({
-    ...a,
-    disclosure: $(`al_${a.id}`).value,
-    amount: num(`am_${a.id}`),
+  syncRowState();
+  const allowances = allowanceRows.map(r => ({
+    label: r.custom ? (r.label.trim() || 'その他の手当') : r.label,
+    kind: r.kind,
+    amount: r.amount === '' || r.amount == null ? null : Number(r.amount),
   }));
 
   return {
@@ -565,7 +715,9 @@ function validate(d) {
   if (!d.dailyHours) return '1日の所定労働時間を入力してください。';
   if (d.holidays >= 365) return '年間休日数を365日未満で入力してください。';
   for (const a of d.allowances) {
-    if (a.disclosure === 'stated' && !a.amount) return `${a.label}の金額を入力してください。`;
+    if (a.amount !== null && (!Number.isFinite(a.amount) || a.amount < 0)) {
+      return `${a.label}の金額を正しく入力してください。`;
+    }
   }
   return null;
 }
@@ -589,22 +741,29 @@ function normalize(d) {
     monthly -= otDeducted;
   }
 
-  // 金額が明記された固定的手当のみ加算
+  // 毎月かならず同じ額が支給される手当のうち、金額が明記されたものだけを加算する。
+  // 金額が書かれていない手当は推定で足さず、情報開示の問題として扱う。
   let fixedAllowance = 0;
   let unstatedCount = 0;
   let salesAllowanceFlagged = false;
+  const salesAllowanceLabels = [];
+
   for (const a of d.allowances) {
-    if (a.disclosure === 'none') continue;
-    if (a.kind === 'otSuspect') { salesAllowanceFlagged = true; continue; }
+    if (a.kind === 'otSuspect') {
+      salesAllowanceFlagged = true;
+      salesAllowanceLabels.push(a.label);
+      continue;
+    }
     if (a.kind !== 'fixed') continue;
-    if (a.disclosure === 'stated') fixedAllowance += a.amount;
+    if (typeof a.amount === 'number' && a.amount > 0) fixedAllowance += a.amount;
     else unstatedCount++;
   }
 
   const monthlyHours = (365 - d.holidays) * d.dailyHours / 12;
   const hourly = (monthly + fixedAllowance) / monthlyHours;
 
-  return { monthly, monthlyHours, fixedAllowance, unstatedCount, salesAllowanceFlagged, hourly, otDeducted, notes };
+  return { monthly, monthlyHours, fixedAllowance, unstatedCount,
+           salesAllowanceFlagged, salesAllowanceLabels, hourly, otDeducted, notes };
 }
 
 function scoreTransparency(d, n) {
@@ -721,7 +880,8 @@ function scoreOvertime(d, n) {
   }
   if (n.salesAllowanceFlagged) {
     s -= 10;
-    why.push('営業手当があり、残業代の代わりになっている可能性がある');
+    const names = n.salesAllowanceLabels.join('・');
+    why.push(`${names}があり、残業代の代わりになっている可能性がある`);
   }
   if (d.workSystem === 'discretion') {
     // 固定残業の時間数不明(-10点)と同格。どちらも残業の実態が求人票から判断できない
