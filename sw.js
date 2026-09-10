@@ -13,7 +13,7 @@
  * 上げ忘れると古いキャッシュが残り続ける。
  */
 
-const CACHE_VERSION = 'v6-2026-09';
+const CACHE_VERSION = 'v7-2026-09';
 const CACHE_NAME = `kyujinhyo-checker-${CACHE_VERSION}`;
 
 // オフラインでも開けるように、最初に取り込んでおくもの
