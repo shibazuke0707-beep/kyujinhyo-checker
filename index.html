@@ -119,6 +119,55 @@
   .seg input:checked + span { color: var(--paper); }
   .seg label:has(input:checked) { background: var(--navy); color: var(--paper); }
 
+  .saved { margin-bottom: 28px; padding: 0 0 6px; }
+  .savedhead {
+    display: flex; align-items: baseline; gap: 12px;
+    padding: 20px 26px 12px; border-bottom: 1px solid var(--rule);
+  }
+  .savedhead h2 { font-family: var(--serif); font-size: 18px; font-weight: 600; margin: 0; }
+  .savedhead .count { font-size: 13px; color: var(--ink-soft); }
+  .savednote { padding: 0 26px; margin: 12px 0 8px; }
+
+  .sitem { border-bottom: 1px solid var(--rule); }
+  .sitem:last-of-type { border-bottom: 0; }
+  .shead {
+    display: grid; grid-template-columns: 54px 1fr auto;
+    gap: 14px; align-items: center;
+    padding: 14px 26px; width: 100%;
+    background: none; border: 0; font: inherit; text-align: left; cursor: pointer;
+  }
+  .shead:hover { background: var(--field); }
+  .shead > * { min-width: 0; }
+  .snum { font-family: var(--serif); font-size: 27px; font-weight: 600; line-height: 1; text-align: right; }
+  .sname { font-size: 15px; overflow-wrap: anywhere; }
+  .smeta { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+  .sflags { font-size: 12px; color: var(--bad); margin-top: 2px; }
+  .scaret { color: var(--ink-soft); font-size: 12px; }
+
+  .sbody { padding: 4px 26px 18px; }
+  .sbody .cat { margin-top: 10px; }
+  .sacts { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+  .sacts button { font: inherit; font-size: 13px; border-radius: 3px; padding: 7px 16px; cursor: pointer; }
+  .sacts .open { background: var(--navy); color: var(--paper); border: 0; }
+  .sacts .del2 { background: var(--paper); color: var(--bad); border: 1px solid var(--rule-strong); }
+
+  .replacebox { padding: 16px 26px 20px; background: var(--field); border-top: 1px solid var(--rule); }
+  .replacebox p { margin: 0 0 12px; font-size: 14px; }
+  .replacerow {
+    display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    padding: 8px 0; border-top: 1px dotted var(--rule-strong); font-size: 14px;
+  }
+  .replacerow button {
+    font: inherit; font-size: 13px; background: var(--paper); color: var(--navy);
+    border: 1px solid var(--rule-strong); border-radius: 3px; padding: 5px 14px; cursor: pointer;
+    white-space: nowrap;
+  }
+  .replacerow button:hover { background: var(--navy); color: var(--paper); }
+
+  .saveact { padding: 16px 26px 22px; border-top: 1px solid var(--rule); display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .saveact button { font: inherit; font-size: 14px; background: var(--navy); color: var(--paper); border: 0; border-radius: 3px; padding: 9px 20px; cursor: pointer; }
+  .saveact .msg { font-size: 13px; color: var(--ink-soft); }
+
   textarea {
     font: inherit; font-size: 14px; line-height: 1.7;
     width: 100%; margin-top: 12px;
@@ -267,6 +316,15 @@
     <p>年収の額面だけでは、手取りの時間あたり単価も休みの実態も見えません。求人票に書かれている内容をそのまま入力すると、実質時給・年間休日・残業条件を業種相場と最低賃金の両面から採点します。</p>
   </header>
 
+  <section class="sheet saved" id="savedSection" hidden>
+    <div class="savedhead">
+      <h2>保存した求人</h2>
+      <span class="count" id="savedCount"></span>
+    </div>
+    <div id="savedList"></div>
+    <p class="hint savednote">保存内容はこの端末のブラウザ内にのみ残ります。サーバーには送信されません。ブラウザのデータを消すと保存内容も消えます。</p>
+  </section>
+
   <div class="cols">
     <div class="sheet">
 
@@ -287,6 +345,12 @@
       <fieldset>
         <legend>この求人について</legend>
         <p class="hint">業種と勤務地は、相場比較と最低賃金の判定に使います。</p>
+        <div class="row">
+          <label for="jobName">会社名・求人名</label>
+          <div class="ctl">
+            <input type="text" id="jobName" placeholder="保存して見比べるときの目印" style="width:100%">
+          </div>
+        </div>
         <div class="row">
           <label for="industry">業種</label>
           <div class="ctl">
@@ -958,6 +1022,164 @@ function rankOf(total, marketNearFloor = false, legalConcern = false) {
     : 'この地域・業種は相場自体が最低賃金に近いため、ホワイト判定にはしていません。' };
 }
 
+
+// ============================================================
+// 保存と比較
+//
+// 保存先はこの端末のブラウザ内のみ。サーバーには一切送らない。
+// 給与情報を扱うので、端末外に出さない方針は維持する。
+// ============================================================
+
+const SAVE_KEY = 'kyujinhyo-checker.saved.v1';
+const SAVE_LIMIT = 5;
+
+/* ブラウザの設定によっては保存領域を使えないことがある。
+   その場合も採点自体は動くよう、失敗しても止めない。 */
+function loadSaved() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list : [];
+  } catch { return []; }
+}
+
+function persistSaved(list) {
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(list)); return true; }
+  catch { return false; }
+}
+
+let savedList = loadSaved();
+let pendingSave = null;   // 5件埋まっているときの保存待ち
+
+/** フォームの内容を丸ごと控える。後から開いて直せるようにするため */
+function snapshotForm() {
+  syncRowState();
+  return {
+    jobName: $('jobName').value.trim(),
+    industry: $('industry').value,
+    pref: $('pref').value,
+    paymode: document.querySelector('input[name=paymode]:checked').value,
+    basePay: $('basePay').value,
+    annualMin: $('annualMin').value,
+    annualMax: $('annualMax').value,
+    bonus: $('bonus').value,
+    fixedOtMode: $('fixedOtMode').value,
+    fixedOtHours: $('fixedOtHours').value,
+    fixedOtAmount: $('fixedOtAmount').value,
+    holidays: $('holidays').value,
+    dailyHours: $('dailyHours').value,
+    workSystem: $('workSystem').value,
+    allowances: allowanceRows.map(r => ({ ...r })),
+  };
+}
+
+/** 保存した内容をフォームに戻す */
+function restoreForm(f) {
+  $('jobName').value = f.jobName || '';
+  $('industry').value = f.industry || '';
+  $('industry').dispatchEvent(new Event('change'));
+  $('pref').value = f.pref || '';
+  const radio = document.querySelector(`input[name=paymode][value="${f.paymode}"]`);
+  if (radio) radio.checked = true;
+  $('modeMonthly').hidden = f.paymode === 'annual';
+  $('modeAnnual').hidden = f.paymode !== 'annual';
+  for (const k of ['basePay','annualMin','annualMax','bonus','fixedOtMode',
+                   'fixedOtHours','fixedOtAmount','holidays','dailyHours','workSystem']) {
+    $(k).value = f[k] ?? '';
+  }
+  allowanceRows.length = 0;
+  for (const r of (f.allowances || [])) allowanceRows.push({ ...r });
+  customSeq = Math.max(customSeq, allowanceRows.length);
+  renderChips(); renderRows();
+  clearFilledMarks();
+}
+
+function renderSaved() {
+  const sec = $('savedSection');
+  if (!savedList.length && !pendingSave) { sec.hidden = true; return; }
+  sec.hidden = false;
+  $('savedCount').textContent = `${savedList.length} / ${SAVE_LIMIT}件`;
+
+  $('savedList').innerHTML = savedList.map((s, i) => {
+    const r = s.result;
+    const flags = [
+      r.violation ? '最低賃金割れ' : null,
+      r.hoursWarning ? '法定労働時間超過' : null,
+      r.floorNotice ? '相場が下限に近い' : null,
+    ].filter(Boolean);
+    return `<div class="sitem">
+      <button type="button" class="shead" data-toggle="${i}" aria-expanded="false">
+        <span class="snum" style="color:${r.rankColor}">${r.total}</span>
+        <span>
+          <span class="sname">${s.name}</span>
+          <span class="smeta">${r.rankName}／実質時給 ${yen(r.hourly)}円／${r.industryLabel}・${r.prefLabel}</span>
+          ${flags.length ? `<span class="sflags">${flags.join('・')}</span>` : ''}
+        </span>
+        <span class="scaret">詳細</span>
+      </button>
+      <div class="sbody" hidden data-body="${i}">
+        ${r.cats.map(c => `
+          <div class="cat">
+            <h3><span>${c.label}</span><span class="amt">${c.score} / ${c.max}</span></h3>
+            <div class="bar"><i style="width:${c.score / c.max * 100}%;background:${
+              c.score === c.max ? 'var(--good)' : c.score / c.max >= 0.5 ? 'var(--caution)' : 'var(--bad)'
+            }"></i></div>
+          </div>`).join('')}
+        <div class="sacts">
+          <button type="button" class="open" data-open="${i}">この内容をフォームに戻す</button>
+          <button type="button" class="del2" data-remove="${i}">削除</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  $('savedList').insertAdjacentHTML('beforeend', pendingSave ? `
+    <div class="replacebox">
+      <p>保存できるのは${SAVE_LIMIT}件までです。「${pendingSave.name}」を保存するには、どれかを置き換えてください。</p>
+      ${savedList.map((s, i) => `<div class="replacerow">
+        <span>${s.name}(${s.result.total}点)</span>
+        <button type="button" data-replace="${i}">これを置き換える</button>
+      </div>`).join('')}
+      <div class="replacerow" style="border-top:0">
+        <span></span>
+        <button type="button" data-cancel="1">保存をやめる</button>
+      </div>
+    </div>` : '');
+}
+
+$('savedList').addEventListener('click', e => {
+  const t = e.target.closest('[data-toggle],[data-open],[data-remove],[data-replace],[data-cancel]');
+  if (!t) return;
+
+  if (t.dataset.toggle !== undefined) {
+    const body = $('savedList').querySelector(`[data-body="${t.dataset.toggle}"]`);
+    const open = body.hidden;
+    body.hidden = !open;
+    t.setAttribute('aria-expanded', String(open));
+    t.querySelector('.scaret').textContent = open ? '閉じる' : '詳細';
+    return;
+  }
+  if (t.dataset.open !== undefined) {
+    restoreForm(savedList[t.dataset.open].form);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    return;
+  }
+  if (t.dataset.remove !== undefined) {
+    savedList.splice(t.dataset.remove, 1);
+    persistSaved(savedList); renderSaved();
+    return;
+  }
+  if (t.dataset.replace !== undefined) {
+    savedList[t.dataset.replace] = pendingSave;
+    pendingSave = null;
+    persistSaved(savedList); renderSaved();
+    return;
+  }
+  if (t.dataset.cancel !== undefined) { pendingSave = null; renderSaved(); }
+});
+
+renderSaved();
+
 // ------------------------------------------------------------
 // 結果描画
 // ------------------------------------------------------------
@@ -1008,6 +1230,10 @@ function render(d, n, cats, total, violation, base, floorNotice, hoursWarning) {
       ${catHtml}
       ${noteHtml}
     </div>
+    <div class="saveact">
+      <button type="button" id="saveBtn">この結果を保存する</button>
+      <span class="msg" id="saveMsg"></span>
+    </div>
     <div class="facts">
       <div><span>実質時給</span><span>${yen(n.hourly)}円</span></div>
       <div><span>月間所定労働時間</span><span>${n.monthlyHours.toFixed(1)}時間</span></div>
@@ -1015,6 +1241,39 @@ function render(d, n, cats, total, violation, base, floorNotice, hoursWarning) {
       <div><span>この地域・業種の基準時給</span><span>${yen(base)}円</span></div>
       <div><span>適用した最低賃金</span><span>${minWageInEffect(d.pref) ? yen(minWageInEffect(d.pref).amount) + '円' : '判定対象外'}</span></div>
     </div>`;
+
+  $('saveBtn').addEventListener('click', () => {
+    const name = ($('jobName').value.trim()) ||
+                 `${INDUSTRIES.find(([k]) => k === d.industry)[1]}の求人`;
+    const entry = {
+      name,
+      savedAt: Date.now(),
+      form: snapshotForm(),
+      result: {
+        total, rankName: rank.name, rankColor: rank.color,
+        hourly: n.hourly,
+        industryLabel: INDUSTRIES.find(([k]) => k === d.industry)[1],
+        prefLabel: PREF[d.pref][0],
+        cats: cats.map(c => ({ label: c.label, score: c.score, max: c.max })),
+        violation: !!violation, hoursWarning: !!hoursWarning, floorNotice: !!floorNotice,
+      },
+    };
+
+    if (savedList.length >= SAVE_LIMIT) {
+      pendingSave = entry;
+      renderSaved();
+      $('savedSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      $('saveMsg').textContent = `保存枠が${SAVE_LIMIT}件とも埋まっています。上の一覧で置き換える求人を選んでください。`;
+      return;
+    }
+
+    savedList.push(entry);
+    const ok = persistSaved(savedList);
+    renderSaved();
+    $('saveMsg').textContent = ok
+      ? `「${name}」を保存しました(${savedList.length} / ${SAVE_LIMIT}件)。`
+      : 'このブラウザでは保存領域を使えないため、保存できませんでした。';
+  }, { once: true });
 }
 
 // ============================================================
